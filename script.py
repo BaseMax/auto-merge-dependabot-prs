@@ -61,36 +61,49 @@ def ci_checks_passed(pr: PullRequest.PullRequest) -> bool:
     return True
 
 
-def merge_pr(pr: PullRequest.PullRequest, merge_method: str = "squash", dry_run: bool = False) -> None:
+def merge_pr(pr: PullRequest.PullRequest, merge_method: str = "squash", dry_run: bool = False) -> bool:
+    """
+    Attempt to merge PR; return True if merged, False otherwise.
+    """
     repo_name = pr.base.repo.full_name
     logger.info(f"Evaluating PR #{pr.number} in {repo_name}: '{pr.title}'")
 
     if dry_run:
         print(f"[Dry-run] Would merge PR #{pr.number} in {repo_name} - '{pr.title}'")
-        return
+        return False
 
     if pr.is_merged():
         logger.info(f"PR #{pr.number} in {repo_name} is already merged.")
-        return
+        return False
+
+    if pr.state != "open":
+        logger.info(f"PR #{pr.number} in {repo_name} is not open (state={pr.state}). Skipping.")
+        return False
+
+    if pr.draft:
+        logger.info(f"PR #{pr.number} in {repo_name} is a draft. Skipping.")
+        return False
 
     if not wait_for_mergeable(pr):
         logger.info(f"PR #{pr.number} in {repo_name} is not mergeable.")
         print(f"PR #{pr.number} in {repo_name} is not mergeable.")
-        return
+        return False
 
     if not ci_checks_passed(pr):
         logger.info(f"PR #{pr.number} in {repo_name} failed CI checks.")
         print(f"PR #{pr.number} in {repo_name} failed CI checks.")
-        return
+        return False
 
     try:
         print(f"Merging PR #{pr.number} in {repo_name} - '{pr.title}'")
         pr.merge(merge_method=merge_method, commit_message="Auto-merged by dependabot-auto-merge script")
         logger.info(f"PR #{pr.number} in {repo_name} merged successfully.")
         print(f"PR #{pr.number} merged successfully.")
+        return True
     except GithubException as e:
         logger.error(f"Failed to merge PR #{pr.number} in {repo_name}: {e}")
         print(f"Failed to merge PR #{pr.number} in {repo_name}: {e}")
+        return False
 
 
 def get_user_repos_with_write_access(github_client: Github) -> List[Repository.Repository]:
@@ -112,6 +125,10 @@ def main(args: argparse.Namespace) -> None:
     print(f"Found {len(repos)} repositories with write access.")
 
     excluded = set(args.exclude_repos or [])
+
+    total_prs_checked = 0
+    total_prs_merged = 0
+
     for repo in repos:
         if repo.name in excluded:
             print(f"Skipping excluded repository: {repo.full_name}")
@@ -125,8 +142,13 @@ def main(args: argparse.Namespace) -> None:
             continue
 
         for pr in pulls:
+            total_prs_checked += 1
             if is_dependabot_pr(pr):
-                merge_pr(pr, merge_method=args.merge_method, dry_run=args.dry_run)
+                if merge_pr(pr, merge_method=args.merge_method, dry_run=args.dry_run):
+                    total_prs_merged += 1
+                time.sleep(0.2)
+
+    print(f"Checked {total_prs_checked} PR(s), merged {total_prs_merged} PR(s).")
 
 
 if __name__ == "__main__":
