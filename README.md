@@ -72,14 +72,6 @@ All actions and errors are logged to `dependabot_automerge.log` in the script di
 
 ---
 
-## License
-
-MIT License © 2025 Max Base
-
-See [LICENSE](LICENSE) for details.
-
----
-
 ## Disclaimer
 
 Use this script at your own risk. It assumes you trust Dependabot PRs and that your CI checks are correctly configured.
@@ -91,3 +83,11 @@ Use this script at your own risk. It assumes you trust Dependabot PRs and that y
 Max Base
 
 [https://github.com/BaseMax](https://github.com/BaseMax)
+
+---
+
+## License
+
+MIT License © 2025 Max Base
+
+See [LICENSE](LICENSE) for details.
