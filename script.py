@@ -8,9 +8,9 @@ from github import Github, Repository, PullRequest
 from github.GithubException import GithubException
 
 logging.basicConfig(
-    filename='dependabot_automerge.log',
+    filename="dependabot_automerge.log",
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -36,21 +36,21 @@ def is_dependabot_pr(pr: PullRequest.PullRequest, bots: Optional[List[str]] = No
     return pr.user.login in bots
 
 
-def wait_for_mergeable(pr: PullRequest.PullRequest, max_attempts: int = 5, delay_seconds: int = 5) -> bool:
+def wait_for_mergeable(pr: PullRequest.PullRequest, attempts: int = 5, delay: int = 5) -> bool:
     """
-    Wait until GitHub sets the mergeable status on a PR or max attempts reached.
+    Wait for GitHub to compute mergeability. Retry if unknown.
     """
-    for _ in range(max_attempts):
+    for _ in range(attempts):
         pr.update()
         if pr.mergeable is not None:
             return pr.mergeable
-        time.sleep(delay_seconds)
+        time.sleep(delay)
     return False
 
 
 def ci_checks_passed(pr: PullRequest.PullRequest) -> bool:
     """
-    Check if all combined status checks for the PR's head commit have succeeded.
+    Verify all combined status checks on the PR's head commit succeeded.
     """
     combined_status = pr.get_combined_status()
     if combined_status.total_count == 0:
@@ -66,7 +66,7 @@ def ci_checks_passed(pr: PullRequest.PullRequest) -> bool:
 
 def merge_pr(pr: PullRequest.PullRequest, merge_method: str = "squash", dry_run: bool = False) -> None:
     """
-    Attempt to merge the PR if possible, respecting dry run mode.
+    Attempt to merge a PR if it passes all checks and conditions.
     """
     repo_name = pr.base.repo.full_name
     logger.info(f"Evaluating PR #{pr.number} in {repo_name}: '{pr.title}'")
@@ -100,11 +100,7 @@ def get_user_repos_with_write_access(github_client: Github) -> List[Repository.R
     Retrieve all repositories the authenticated user has write access to.
     """
     user = github_client.get_user()
-    repos = []
-    for repo in user.get_repos():
-        if repo.permissions.push:
-            repos.append(repo)
-    return repos
+    return [repo for repo in user.get_repos() if repo.permissions.push]
 
 
 def main(args: argparse.Namespace) -> None:
@@ -112,13 +108,14 @@ def main(args: argparse.Namespace) -> None:
     repos = get_user_repos_with_write_access(github_client)
     print(f"Found {len(repos)} repositories with write access.")
 
+    excluded = set(args.exclude_repos or [])
     for repo in repos:
-        if args.exclude_repos and repo.name in args.exclude_repos:
+        if repo.name in excluded:
             print(f"Skipping excluded repository: {repo.full_name}")
             continue
 
         print(f"Checking repository: {repo.full_name}")
-        pulls = repo.get_pulls(state='open', sort='updated', direction='desc')
+        pulls = repo.get_pulls(state="open", sort="updated", direction="desc")
 
         for pr in pulls:
             if is_dependabot_pr(pr):
@@ -131,18 +128,18 @@ if __name__ == "__main__":
         "--merge-method",
         choices=["merge", "squash", "rebase"],
         default="squash",
-        help="Merge method to use when merging PRs."
+        help="Merge method to use when merging PRs.",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Show PRs that would be merged without actually merging."
+        help="Show PRs that would be merged without actually merging.",
     )
     parser.add_argument(
         "--exclude-repos",
         nargs="*",
         default=[],
-        help="List of repository names to exclude from processing."
+        help="List of repository names to exclude from processing.",
     )
     args = parser.parse_args()
 
