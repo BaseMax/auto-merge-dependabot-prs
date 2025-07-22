@@ -5,7 +5,7 @@ import logging
 import argparse
 from typing import List, Optional
 from github import Github, Repository, PullRequest
-from github.GithubException import GithubException
+from github.GithubException import GithubException, RateLimitExceededException
 
 logging.basicConfig(
     filename="dependabot_automerge.log",
@@ -16,9 +16,6 @@ logger = logging.getLogger(__name__)
 
 
 def get_github_client(token_env_var: str = "GITHUB_TOKEN") -> Github:
-    """
-    Initialize and return a Github client from an environment variable token.
-    """
     token = os.getenv(token_env_var)
     if not token:
         logger.error(f"Environment variable '{token_env_var}' is not set.")
@@ -28,20 +25,18 @@ def get_github_client(token_env_var: str = "GITHUB_TOKEN") -> Github:
 
 
 def is_dependabot_pr(pr: PullRequest.PullRequest, bots: Optional[List[str]] = None) -> bool:
-    """
-    Check if the PR was opened by Dependabot or specified bots.
-    """
     if bots is None:
         bots = ["dependabot[bot]", "github-security[bot]"]
     return pr.user.login in bots
 
 
 def wait_for_mergeable(pr: PullRequest.PullRequest, attempts: int = 5, delay: int = 5) -> bool:
-    """
-    Wait for GitHub to compute mergeability. Retry if unknown.
-    """
     for _ in range(attempts):
-        pr.update()
+        try:
+            pr.update()
+        except GithubException as e:
+            logger.warning(f"Failed to update PR #{pr.number}: {e}")
+            return False
         if pr.mergeable is not None:
             return pr.mergeable
         time.sleep(delay)
@@ -49,10 +44,12 @@ def wait_for_mergeable(pr: PullRequest.PullRequest, attempts: int = 5, delay: in
 
 
 def ci_checks_passed(pr: PullRequest.PullRequest) -> bool:
-    """
-    Verify all combined status checks on the PR's head commit succeeded.
-    """
-    combined_status = pr.get_combined_status()
+    try:
+        combined_status = pr.get_combined_status()
+    except GithubException as e:
+        logger.warning(f"Failed to get combined status for PR #{pr.number}: {e}")
+        return False
+
     if combined_status.total_count == 0:
         logger.info(f"PR #{pr.number}: No CI status checks found.")
         return False
@@ -65,14 +62,15 @@ def ci_checks_passed(pr: PullRequest.PullRequest) -> bool:
 
 
 def merge_pr(pr: PullRequest.PullRequest, merge_method: str = "squash", dry_run: bool = False) -> None:
-    """
-    Attempt to merge a PR if it passes all checks and conditions.
-    """
     repo_name = pr.base.repo.full_name
     logger.info(f"Evaluating PR #{pr.number} in {repo_name}: '{pr.title}'")
 
     if dry_run:
         print(f"[Dry-run] Would merge PR #{pr.number} in {repo_name} - '{pr.title}'")
+        return
+
+    if pr.is_merged():
+        logger.info(f"PR #{pr.number} in {repo_name} is already merged.")
         return
 
     if not wait_for_mergeable(pr):
@@ -96,11 +94,16 @@ def merge_pr(pr: PullRequest.PullRequest, merge_method: str = "squash", dry_run:
 
 
 def get_user_repos_with_write_access(github_client: Github) -> List[Repository.Repository]:
-    """
-    Retrieve all repositories the authenticated user has write access to.
-    """
-    user = github_client.get_user()
-    return [repo for repo in user.get_repos() if repo.permissions.push]
+    try:
+        user = github_client.get_user()
+        repos = [repo for repo in user.get_repos() if repo.permissions.push]
+        return repos
+    except RateLimitExceededException as e:
+        logger.error(f"GitHub API rate limit exceeded: {e}")
+        sys.exit(1)
+    except GithubException as e:
+        logger.error(f"GitHub API error: {e}")
+        sys.exit(1)
 
 
 def main(args: argparse.Namespace) -> None:
@@ -115,7 +118,11 @@ def main(args: argparse.Namespace) -> None:
             continue
 
         print(f"Checking repository: {repo.full_name}")
-        pulls = repo.get_pulls(state="open", sort="updated", direction="desc")
+        try:
+            pulls = repo.get_pulls(state="open", sort="updated", direction="desc")
+        except GithubException as e:
+            logger.warning(f"Failed to fetch PRs for {repo.full_name}: {e}")
+            continue
 
         for pr in pulls:
             if is_dependabot_pr(pr):
